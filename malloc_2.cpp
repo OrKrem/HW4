@@ -18,27 +18,24 @@ Mallocmetadata* firstMetadate = nullptr;
 
 
 static void* my_alloc(Mallocmetadata** node, Mallocmetadata* next, Mallocmetadata* prev, size_t size) {
-    (*node) = (Mallocmetadata*) sbrk(sizeof(Mallocmetadata));
-    if ((*node) == (void*) -1){
-        return nullptr;
-    }
+    
 
-    void* allocatedMemory = sbrk(size);
+    void* allocatedMemory = sbrk(size + sizeof(Mallocmetadata));
 
     if (allocatedMemory == (void*) -1) {
         return nullptr;
     }
-
+    (*node) = (Mallocmetadata*)allocatedMemory;
     (*node)->size = size;
     (*node)->prev = prev;
     (*node)->next = next;
-    (*node)->p = allocatedMemory;
+    (*node)->p = (char*)allocatedMemory + sizeof(Mallocmetadata);
     (*node)->is_free = false;
 
     if (prev != nullptr)
         prev->next = *node;
 
-    return allocatedMemory;
+    return (char*)allocatedMemory + sizeof(Mallocmetadata);
 }
 /**
  * Searches for a free block with at least 'size' bytes or allocates a new block using sbrk() if none are found.
