@@ -10,6 +10,7 @@ const int ALLOCATE_MAX_SIZE = 100000000;
 const int NUMBER_OF_ORDERS = 11;
 const int INTIAL_NUMBER_OF_BLOCKS = 32;
 const int MAX_ORDER = 10;
+const int MIN_ORDER = 0;
 
 uint32_t  Order[NUMBER_OF_ORDERS] = {
     128, // MIN_ORDER
@@ -24,8 +25,6 @@ uint32_t  Order[NUMBER_OF_ORDERS] = {
     65536, //ORDER_9
     131072, //MAX_ORDER
 };
-
-
 
 struct Mallocmetadata{
     int32_t cookie; // 4 byte
@@ -62,7 +61,13 @@ static void _initialize_malloc(){
         exit(-1);
     }
 
-    firstMetadate = (Mallocmetadata*)((uint64_t)current_program_break_address + ((uint64_t)current_program_break_address & (Order[MAX_ORDER] * INTIAL_NUMBER_OF_BLOCKS))); //current_program_break_address + current_program_break_address % modulo32*128kb
+    firstMetadate = (Mallocmetadata*)((uint64_t)current_program_break_address + ((uint64_t)current_program_break_address & (Order[MAX_ORDER] * INTIAL_NUMBER_OF_BLOCKS)-1)); //current_program_break_address + current_program_break_address % modulo32*128kb
+    void * current_program_break_address = sbrk(0);
+    if (current_program_break_address == (void*) -1) {
+        perror("sbrk: failed %s\n", strerror(errno));
+        exit(-1);
+    }
+
     for(int i=0; i < NUMBER_OF_ORDERS -1 ; i++){
         free_blocks[i] = nullptr;
     }
@@ -72,6 +77,7 @@ static void _initialize_malloc(){
     Mallocmetadata* current_block = firstMetadate;
     Mallocmetadata* previous_block = nullptr;
     free_blocks[MAX_ORDER] = firstMetadate;
+
     for(int i=0; i<INTIAL_NUMBER_OF_BLOCKS; i++){
         current_block->cookie = global_cookie;
         current_block->start_address = (uint64_t) current_block;
@@ -86,20 +92,114 @@ static void _initialize_malloc(){
     }
     current_block->next = firstMetadate;
     firstMetadate->prev = current_block;
+
+    is_malloc_first_use = false;
     //First time intilize heap
     //intialize Blocks
     //Intialize free Blocks
 }
 
+int _get_smallest_fitting_order(uint64_t  size){
+    if(size > Order[MAX_ORDER]){ //size is bigger than the Maximum order
+        return -1;
+    }
+    else if (size < Order[0]){
+        return 0;
+    }
 
+    for(int i = MAX_ORDER; i > 0; i--){
+        if(size> Order[i-1]){
+            return i;
+        }
+    }
+
+}
+
+Mallocmetadata* _split_block(Mallocmetadata* block){
+    if(block == nullptr){
+        return nullptr;
+    }
+
+    if(block->size == Order[MIN_ORDER]){
+        return nullptr;
+    }
+
+    int block_order = _get_smallest_fitting_order(block->size);
+    int new_block_order = block_order -1;
+
+    //TODO: REMOVE BLOCK from list
+    //TODO: ADD BLOCK to relveant list
+    block->size = block->size << 1;
+    Mallocmetadata* second_block = (Mallocmetadata*)(((void*)block) + block->size);
+    second_block->cookie = 0;
+    second_block->is_free = true;
+    second_block->size = block->size;
+    second_block->start_address = (uint64_t)second_block;
+    second_block->next = block->next;//TODO: Or please check me!!!!!!!!!
+    block->next = second_block;
+    second_block->prev = block;
+    return block;
+}
 
 
 static void* my_alloc(Mallocmetadata** node, Mallocmetadata* next, Mallocmetadata* prev, size_t size) {
-    // condition on size 
+    if(is_malloc_first_use){
+        _initialize_malloc();
+    }
 
-    //mmap for big blocks
+    int order_size_needed = _get_smallest_fitting_order(size);
+
+    if( order_size_needed < 0){ //Need to do mmap
+        void* allocatedMemory mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0); //TODO:  Rethink the flags
+        if (allocatedMemory == (void*) -1){
+            return nullptr;
+        }
+        Mallocmetadata*  metadata = (Mallocmetadata*) allocatedMemory;
+        metadata->cookie =global_cookie;
+        metadata->is_free = false;
+        metadata->size = size;
+        metadata->start_address = (uint64_t) allocatedMemory;
+        //TODO: ADD to the mmap list with Or's interface;
+        return (allocatedMemory + sizeof(Mallocmetadata));
+    }
+
+    if(free_blocks[order_size_needed] != nullptr){ //There is an available block with needed size
+        Mallocmetadata*  metadata = free_blocks[order_size_needed];
+        metadata->cookie = global_cookie;
+        metadata->is_free = false;
+        //TODO: REMOVE from freeblocklist
+        return ((void*) metadata) + sizeof(Mallocmetadata);
+    }
+
+    int order_size_to_split = -1;
+    for (int i = order_size_needed + 1 ; i < NUMBER_OF_ORDERS; i++){
+        if(free_blocks[i] != nullptr){
+            order_size_to_split = i ;
+            break;
+        }
+    }
+
+    if(order_size_to_split == -1){ // Didn't find big enough block to split.
+        return nullptr;
+    }
+
+    Mallocmetadata*  block_to_split = free_blocks[order_size_to_split];
+    int number_of_order_size_needed = order_size_to_split - order_size_needed;
+
+    for(int i=0; i < number_of_order_size_needed; i++){
+        _split_block(block_to_split);
+    }
+
+    return ((void*) block_to_split) + sizeof(Mallocmetadata);
+
+
+
 
     //if first allocate
+    // condition on size 
+    //mmap for big blocks
+
+    
 
     //search for needed block size
 

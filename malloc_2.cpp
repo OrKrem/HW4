@@ -76,7 +76,7 @@ void* smalloc(size_t size){
 
     void* allocBlock = my_alloc(&curr, nullptr, prevMD, size);
 
-    return  allocBlock;
+    return  allocBlock; //TODO: Check this section returnig a pointer to begining of block including metadata
 
 }
 
