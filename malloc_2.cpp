@@ -172,7 +172,7 @@ void* srealloc(void* oldp, size_t size){
                 }
 
                 curr->is_free = true;
-                return memcpy(newlyAllocSpace, curr->p, curr->size);
+                return memmove(newlyAllocSpace, curr->p, curr->size);
             }
         }
 
