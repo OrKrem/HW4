@@ -5,6 +5,7 @@
 #include <string.h>
 #include <errno.h>
 #include <stdio.h>
+#include <sys/mman.h>
 
 const int ALLOCATE_MAX_SIZE = 100000000;
 
@@ -130,7 +131,7 @@ static void insert(Mallocmetadata *mallocmetadata){
     }
 
     //In case we have just 1 element in list
-    if(curr->next = nullptr){
+    if(curr->next == nullptr){
         curr->next = mallocmetadata;
         mallocmetadata->prev = curr;
         return;
@@ -257,10 +258,10 @@ static void _initialize_malloc(){
        return;
     }
 
-    uint64_t modulo_to_128kb_32 = ((uint64_t)current_program_break_address & (Order[MAX_ORDER] * INTIAL_NUMBER_OF_BLOCKS)-1);
+    uint64_t modulo_to_128kb_32 = ((uint64_t)current_program_break_address & (Order[MAX_ORDER] * INTIAL_NUMBER_OF_BLOCKS-1));
     void * tmp_p = sbrk(INTIAL_NUMBER_OF_BLOCKS*Order[MAX_ORDER] + modulo_to_128kb_32 );//TODO :Dan,redefinition(line 175)
     if (tmp_p == (void*) -1) {
-        perror("sbrk: failed %s\n", strerror(errno));
+        //perror("sbrk: failed %s\n", strerror(errno));
         exit(-1);
     }
 
@@ -288,7 +289,7 @@ static void _initialize_malloc(){
             previous_block->next = current_block;
         }
         previous_block = current_block;
-        current_block = (Mallocmetadata*) ((void*)current_block + Order[MAX_ORDER]);
+        current_block = (Mallocmetadata*) ((char*)current_block + Order[MAX_ORDER]);
     }
     current_block->next = firstMetadate;
     firstMetadate->prev = current_block;
@@ -312,7 +313,7 @@ int _get_smallest_fitting_order(uint64_t  size){
             return i;
         }
     }
-
+    return -1;
 }
 
 Mallocmetadata* _split_block(Mallocmetadata* block){
@@ -324,9 +325,6 @@ Mallocmetadata* _split_block(Mallocmetadata* block){
         return nullptr;
     }
     
-    int block_order = _get_smallest_fitting_order(block->size);
-    int new_block_order = block_order -1;
-
     //TODO: REMOVE BLOCK from list. Fixed.
     remove(block);
     //TODO: ADD BLOCK to relveant list
@@ -377,7 +375,7 @@ static void* my_alloc(size_t size) {
         metadata->is_free = false;
         //TODO: REMOVE from freeblocklist
         remove(metadata);
-        return (void*) ((char*) metadata) + sizeof(Mallocmetadata);//TODO DAN: adin ,why cast to void*? FIXED. DAN 1/7
+        return (void*) ((char*) metadata + sizeof(Mallocmetadata));//TODO DAN: adin ,why cast to void*? FIXED. DAN 1/7
     }
 
     int order_size_to_split = -1;
@@ -399,7 +397,7 @@ static void* my_alloc(size_t size) {
         _split_block(block_to_split);
     }
 
-    return (void*) ((char*) block_to_split) + sizeof(Mallocmetadata);
+    return (void*) (((char*) block_to_split) + sizeof(Mallocmetadata));
 
     //if first allocate
     // condition on size 
@@ -615,7 +613,7 @@ void* srealloc(void* oldp, size_t size){
     current_block->cookie = global_cookie;
     current_block->is_free = false;
     memmove((void *)(current_block->start_address + sizeof(Mallocmetadata)),oldp,start_of_block->size);
-    
+    return (void*) ((char*)current_block + sizeof(Mallocmetadata));
 } 
 
 
