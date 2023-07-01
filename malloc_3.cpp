@@ -170,6 +170,21 @@ static void insert(Mallocmetadata *mallocmetadata){
     return;
 }
 
+size_t get_list_size(Mallocmetadata* list){
+    size_t number_of_elements = 0;
+    if(list == nullptr){
+        return number_of_elements;
+    }
+    number_of_elements++;
+    Mallocmetadata* current = list;
+    do
+    {
+        number_of_elements++;
+        current = current->next;
+    } while (current != list); // Completed a circle
+    return number_of_elements;
+}
+
 /**
  *List functions for mmap_list-remove,insert.
  */
@@ -478,11 +493,15 @@ void sfree(void* p){
     start_of_block->is_free = true;
     Mallocmetadata* buddy = (Mallocmetadata*) (current_block->start_address ^ current_block->size);
 
-    while( current_block->is_free && current_block->size < Order[MAX_ORDER]  && buddy->is_free){
+    while( current_block->is_free && current_block->size < Order[MAX_ORDER]  && buddy->is_free && buddy->size != current_block->size){
         remove(buddy);
         remove(current_block);
         if (buddy->start_address < current_block->start_address){
+            current_block->cookie = 0;
             current_block = buddy;
+        }
+        else{
+            buddy->cookie = 0;
         }
         current_block->size = current_block->size * 2;
         insert(current_block);
@@ -540,7 +559,7 @@ void* srealloc(void* oldp, size_t size){
             return nullptr;
         }
         remove_mmap(start_of_block);
-        memmove(new_p,oldp,size);
+        memmove(new_p,oldp,start_of_block->size);
         munmap(start_of_block,start_of_block->size);
         return new_p;
     }
@@ -553,7 +572,7 @@ void* srealloc(void* oldp, size_t size){
     Mallocmetadata*  current_block = start_of_block;
     Mallocmetadata* buddy = (Mallocmetadata*) (current_block->start_address ^ current_block->size);
 
-    while(optional_size_after_merging < size && optional_size_after_merging < Order[MAX_ORDER]  && buddy->is_free){
+    while(  (current_block == start_of_block || current_block->is_free) && optional_size_after_merging < size && optional_size_after_merging < Order[MAX_ORDER]  && buddy->is_free && buddy->size != current_block->size){
         if (buddy->start_address < current_block->start_address){
             current_block = buddy;
         }
@@ -575,10 +594,28 @@ void* srealloc(void* oldp, size_t size){
         if(new_p == nullptr){
             return nullptr;
         }
-        memmove(new_p,oldp,size);
+        memmove(new_p,oldp,start_of_block->size);
         sfree(oldp);
         return new_p;
     }
+
+    current_block = start_of_block;
+    int order_number_to_merge = _get_smallest_fitting_order(optional_size_after_merging);
+    int starting_order_number = _get_smallest_fitting_order(start_of_block->size);
+    remove(start_of_block);
+    for(int i = starting_order_number; i<order_number_to_merge; i++ ){
+        buddy = (Mallocmetadata*) (current_block->start_address ^ current_block->size);
+        remove(buddy);
+        buddy->cookie = 0;
+        if (buddy->start_address < current_block->start_address){
+            current_block = buddy;
+        }
+        current_block->size = current_block->size * 2;
+    }
+    current_block->cookie = global_cookie;
+    current_block->is_free = false;
+    memmove((void *)(current_block->start_address + sizeof(Mallocmetadata)),oldp,start_of_block->size);
+    
 } 
 
 
@@ -590,18 +627,11 @@ void* srealloc(void* oldp, size_t size){
  * @return #allocated blocks in the heap that are currently free.
  */
 size_t _num_free_blocks(){
-    unsigned int numOfFreeBlocks = 0;
-
-    Mallocmetadata* curr = firstMetadate;
-
-    while(curr){
-        if(curr->is_free){
-            numOfFreeBlocks++;
-        }
-        curr = curr->next;
+    size_t numOfFreeBlocks = 0;
+    for(int i=0; i < NUMBER_OF_ORDERS; i++){
+        numOfFreeBlocks += get_list_size(free_blocks[i]);
     }
-
-    return  numOfFreeBlocks;
+    return numOfFreeBlocks;
 }
 
 /**
@@ -609,18 +639,10 @@ size_t _num_free_blocks(){
  * @return #bytes in all allocated blocks in the heap that are currently free, excluding the bytes used by the meta-data structs.
  */
 size_t _num_free_bytes(){
-    unsigned int numFreeBytes = 0;
-
-    Mallocmetadata* curr = firstMetadate;
-
-    while(curr){
-        if(curr->is_free){
-            numFreeBytes = numFreeBytes + curr->size;
-        }
-
-        curr = curr->next;
+    size_t numFreeBytes = 0;
+    for(int i=0; i < NUMBER_OF_ORDERS; i++){
+        numFreeBytes += get_list_size(free_blocks[i]) * (Order[i]-sizeof(Mallocmetadata));
     }
-
     return numFreeBytes;
 }
 
@@ -629,35 +651,18 @@ size_t _num_free_bytes(){
  * @return the overall (free and used) number of allocated blocks in the heap.
  */
 size_t _num_allocated_blocks(){
-    unsigned int numAllocatedBlocks = 0;
+    size_t number_of_mmap_elements = get_list_size(mmap_list_head);
+    size_t numAllocatedBlocks = 0;
 
     Mallocmetadata* curr = firstMetadate;
 
-    while(curr){
+    while((uint64_t)curr != (firstMetadate->start_address + INTIAL_NUMBER_OF_BLOCKS*Order[MAX_ORDER])){
         numAllocatedBlocks++;
-
-        curr = curr->next;
+        curr = (Mallocmetadata*)(curr->start_address + curr->size);
     }
-
-    return numAllocatedBlocks;
+    return (numAllocatedBlocks+number_of_mmap_elements);
 }
 
-/**
- *
- * @return the overall number (free and used) of allocated bytes in the heap, excluding the bytes used by the meta-data structs.
- */
-size_t _num_allocated_bytes(){
-    unsigned int numAllocatedBytes = 0;
-
-    Mallocmetadata* curr = firstMetadate;
-
-    while(curr){
-        numAllocatedBytes = numAllocatedBytes + curr->size;
-        curr = curr->next;
-    }
-
-    return numAllocatedBytes;
-}
 
 /**
  *
@@ -675,5 +680,26 @@ size_t _size_meta_data(){
 size_t _num_meta_data_bytes(){
 
      return _size_meta_data() * _num_allocated_blocks();
+
+}
+
+/**
+ *
+ * @return the overall number (free and used) of allocated bytes in the heap, excluding the bytes used by the meta-data structs.
+ */
+size_t _num_allocated_bytes(){
+    size_t number_of_mmap_bytes = 0;
+    Mallocmetadata* curr = mmap_list_head;
+    if(curr != nullptr){
+    do
+    {
+        number_of_mmap_bytes += (curr->size);
+        curr = curr->next;
+    } while (curr != mmap_list_head); 
+    }
+
+    return (INTIAL_NUMBER_OF_BLOCKS*Order[MAX_ORDER] + number_of_mmap_bytes - _num_meta_data_bytes()); // HEAP_SIZE + MMAP_SIZE - METADATA
+
+    
 
 }
